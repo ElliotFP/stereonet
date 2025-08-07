@@ -92,7 +92,7 @@ export class Stereonet {
   planes: Map<string, PlaneData>;
   lines: Map<string, LineData>;
   graticulesVisible: boolean;
-  planeRepresentation: "pole" | "arc";
+  planeRepresentation: "pole" | "arc"; // Representation of the planes on the stereonet
   pointSize: number; // Size of the points representing poles
 
   constructor({
@@ -189,10 +189,10 @@ export class Stereonet {
     this.lines.clear();
 
     for (const [, plane] of currentPlanes) {
-      this.addPlane(plane.dipAngle, plane.dipDirection);
+      this.addPlane(plane.dipAngle, plane.dipDirection, plane.color);
     }
     for (const [, line] of currentLines) {
-      this.addLine(line.dipAngle, line.dipDirection);
+      this.addLine(line.dipAngle, line.dipDirection, line.color);
     }
   }
 
@@ -218,14 +218,16 @@ export class Stereonet {
         path = this._renderPlaneAsArc(
           planeData.dipAngle,
           planeData.dipDirection,
-          parseInt(id, 10)
+          parseInt(id, 10),
+          planeData.color
         );
       }
       if (this.planeRepresentation === "pole") {
         path = this._renderPlaneAsPole(
           planeData.dipAngle,
           planeData.dipDirection,
-          parseInt(id, 10)
+          parseInt(id, 10),
+          planeData.color
         );
       }
 
@@ -233,6 +235,7 @@ export class Stereonet {
         dipAngle: planeData.dipAngle,
         dipDirection: planeData.dipDirection,
         path: path as PlanePath,
+        color: planeData.color,
       });
     });
   }
@@ -337,7 +340,7 @@ export class Stereonet {
     const show = v === undefined ? !this.graticulesVisible : v;
     this.graticulesVisible = show;
     this.g
-      .selectAll(".graticule, .graticule-10, .stereonet_outline")
+      .selectAll(".graticule, .graticule-10, .stereonet-outline")
       .style("display", show ? "block" : "none");
   }
 
@@ -367,10 +370,34 @@ export class Stereonet {
     return true;
   }
 
+  // Add this helper method to the Stereonet class
+  private _createCustomColorStyle(color: string, elementType: "line" | "plane" | "plane_pole"): string {
+    const baseStyle = elementType === "line" 
+      ? { ...this.styles.data_line }
+      : elementType === "plane"
+      ? { ...this.styles.data_plane }
+      : { ...this.styles.data_plane_pole };
+
+    // Override color properties
+    if (elementType === "plane") {
+      // no fill for planes
+      baseStyle.stroke = color;
+    }
+    else {
+      baseStyle.fill = color;
+      baseStyle.stroke = color;
+    }
+
+    // Convert to CSS string
+    return Object.entries(baseStyle)
+      .map(([key, value]) => `${key}: ${value};`)
+      .join(" ");
+  }
+
   private _addPlaneHoverInteraction(
     path: PlanePath,
     dipAngle: number,
-    dipDirection: number
+    dipDirection: number,
   ) {
     // Add tooltip element if it doesn't exist
     if (!d3.select("#plane-tooltip").node()) {
@@ -387,6 +414,7 @@ export class Stereonet {
         .style("display", "none");
     }
 
+    // const originalStrokeWidth = path.style("stroke-width") || String(this.styles.data_plane["stroke-width"]);
     const tooltip = d3.select("#plane-tooltip");
 
     const getStyle = (className: string) => {
@@ -397,32 +425,29 @@ export class Stereonet {
       return style;
     };
 
+    let originalStrokeWidth = this.styles.data_plane["stroke-width"];
     path
       .on("mouseover", function () {
-        d3.select(this).style("stroke-width", "10px");
-        d3.select(this).style("opacity", 0.6);
-        tooltip
-          .html(`Dip: ${dipAngle}°, Dip Direction: ${dipDirection}°`)
-          .style("display", "block");
+        const sel = d3.select(this as SVGPathElement);
+        originalStrokeWidth = sel.style("stroke-width") || originalStrokeWidth;
+        sel.style("stroke-width", "10px");
+        sel.style("opacity", 0.6);
+        tooltip.html(`Dip: ${dipAngle}°, Dip Direction: ${dipDirection}°`).style("display", "block");
       })
       .on("mousemove", function (event) {
-        tooltip
-          .style("left", event.pageX + 10 + "px")
-          .style("top", event.pageY + 10 + "px");
+        tooltip.style("left", event.pageX + 10 + "px").style("top", event.pageY + 10 + "px");
       })
       .on("mouseout", function () {
-        d3.select(this).style(
-          "stroke-width",
-          getStyle("data_plane")["stroke-width"]
-        ); // Reset stroke width
-        d3.select(this).style("opacity", 1);
+        const sel = d3.select(this as SVGPathElement);
+        sel.style("stroke-width", originalStrokeWidth);
+        sel.style("opacity", 1);
         tooltip.style("display", "none");
       });
   }
 
   private _calculatePoleCoordinates(
-    dipAngle: number,
-    dipDirection: number
+    dipAngle: number, // placement on the dip direction line [0, 90]
+    dipDirection: number // clockwise from north [0, 360)
   ): [number, number] {
     let dd = dipDirection + 180;
 
@@ -437,7 +462,8 @@ export class Stereonet {
   private _renderPlaneAsArc(
     dipAngle: number,
     dipDirection: number,
-    id: number
+    id: number,
+    color?: string | null
   ) {
     const extentStart = 90 - dipAngle;
     const extentEnd = 90 - (dipAngle - 1);
@@ -455,7 +481,7 @@ export class Stereonet {
     const path = this.g
       .append("path")
       .datum(graticuleInput)
-      .attr("style", this.getStyle("data_plane"))
+      .attr("style", color ? this._createCustomColorStyle(color, "plane") : this.getStyle("data_plane"))
       .attr(
         "transform",
         `${this._elementTransformString()} rotate(${dipDirection - 90})`
@@ -473,8 +499,6 @@ export class Stereonet {
 
     this._addPlaneHoverInteraction(path, dipAngle, dipDirection);
 
-    // @ts-expect-error no-issue
-    this.planes.set(id.toString(), path as PlanePath);
 
     return path;
   }
@@ -482,7 +506,8 @@ export class Stereonet {
   private _renderPlaneAsPole(
     dipAngle: number,
     dipDirection: number,
-    id: number
+    id: number,
+    color?: string | null
   ) {
     const poleCoords = this._calculatePoleCoordinates(dipAngle, dipDirection);
     const point = {
@@ -493,7 +518,7 @@ export class Stereonet {
     const path = this.g
       .append("path")
       .datum(point)
-      .attr("style", this.getStyle("data_plane_pole"))
+      .attr("style", color ? this._createCustomColorStyle(color, "plane_pole") : this.getStyle("data_plane_pole"))
       .attr(
         "transform",
         `${this._elementTransformString()} rotate(${poleCoords[1]})`
@@ -512,18 +537,16 @@ export class Stereonet {
       path.attr("d", this.path.pointRadius(this.pointSize));
     }
 
-    // @ts-expect-error no-issue
+    // @ts-expect-error no-issuer
     this._addPlaneHoverInteraction(path, dipAngle, dipDirection);
-    // @ts-expect-error no-issue
-    this.planes.set(id.toString(), path as PlanePath);
 
     return path;
   }
 
   /**
-   * Plots a line on the stereonet based on the given dip angle and dip direction.
+   * Plots a plane on the stereonet based on the given dip angle and dip direction.
    */
-  addPlane(dipAngle: number, dipDirection: number) {
+  addPlane(dipAngle: number, dipDirection: number, color?: string | null) {
     // Validate the dip angle and dip direction
     if (!this._validateDipDirection(dipAngle, dipDirection)) {
       return;
@@ -533,17 +556,18 @@ export class Stereonet {
     let path = null;
 
     if (this.planeRepresentation === "arc") {
-      path = this._renderPlaneAsArc(dipAngle, dipDirection, id);
+      path = this._renderPlaneAsArc(dipAngle, dipDirection, id, color);
     }
 
     if (this.planeRepresentation === "pole") {
-      path = this._renderPlaneAsPole(dipAngle, dipDirection, id);
+      path = this._renderPlaneAsPole(dipAngle, dipDirection, id, color);
     }
 
     this.planes.set(id.toString(), {
       dipAngle,
       dipDirection,
       path: path as PlanePath,
+      color: color || null,
     });
 
     return id;
@@ -567,7 +591,7 @@ export class Stereonet {
   private _addLineHoverInteraction(
     path: LinePath,
     dipAngle: number,
-    dipDirection: number
+    dipDirection: number,
   ) {
     if (!d3.select("#line-tooltip").node()) {
       d3.select("body")
@@ -588,10 +612,13 @@ export class Stereonet {
 
     const normalPointSize = this.pointSize;
     const largePointSize = this.pointSize * 1.5;
+
+    const originalStrokeWidth = this.styles.data_line["stroke-width"];
+    
     path
       .on("mouseover", function () {
         // @ts-expect-error no-issue
-        d3.select(this).attr("d", classPath.pointRadius(largePointSize)); // Reset radius
+        d3.select(this).attr("d", classPath.pointRadius(largePointSize));
         d3.select(this).style("stroke-width", "10px");
         tooltip
           .html(`Dip: ${dipAngle}°, Dip Direction: ${dipDirection}°`)
@@ -604,8 +631,8 @@ export class Stereonet {
       })
       .on("mouseout", function () {
         // @ts-expect-error no-issue
-        d3.select(this).attr("d", classPath.pointRadius(normalPointSize)); // Reset radius
-        d3.select(this).style("stroke-width", "2px");
+        d3.select(this).attr("d", classPath.pointRadius(normalPointSize));
+        d3.select(this).style("stroke-width", originalStrokeWidth);
         tooltip.style("display", "none");
       });
   }
@@ -613,13 +640,15 @@ export class Stereonet {
   /**
    * Plot a linear measurement as a Point on the stereonet.
    */
-  addLine(dipAngle: number, dipDirection: number) {
+  addLine(dipAngle: number, dipDirection: number, color?: string | null) {
     // Validate the dip angle and dip direction
     if (!this._validateDipDirection(dipAngle, dipDirection)) {
       return;
     }
 
     const id = this.lines.size;
+
+    const style = color ? this._createCustomColorStyle(color, "line") : this.getStyle("data_line");
 
     const point = {
       type: "Point",
@@ -629,7 +658,7 @@ export class Stereonet {
     const path = this.g
       .append("path")
       .datum(point)
-      .attr("style", this.getStyle("data_line"))
+      .attr("style", style)
       .attr(
         "transform",
         `${this._elementTransformString()}  rotate(${dipDirection})`
@@ -654,6 +683,7 @@ export class Stereonet {
       dipAngle,
       dipDirection,
       path: path as LinePath,
+      color: color || null, // Store the actual color, or null if undefined/null
     });
 
     return id;

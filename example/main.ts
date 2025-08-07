@@ -2,16 +2,24 @@ import { Stereonet } from "../src";
 
 const streonet = new Stereonet({ selector: "body", size: 900 });
 
-window.stereonet = streonet; // Expose the instance to the global scope for testing
+// Generate around 40 random poles (lines) with random colors and add them to the stereonet
+function randomColor() {
+  // Generate a random hex color
+  return `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0")}`;
+}
 
-streonet.addPlane(30, 45); // Example usage
-streonet.addLine(30, 45); // Example usage
+for (let i = 0; i < 40; i++) {
+  // Dip: 0 < dip < 90, Dip direction: 0 <= dipDir < 360
+  const dip = +(Math.random() * 89.9 + 0.1).toFixed(2);
+  const dipDir = +(Math.random() * 360).toFixed(2);
+  const color = randomColor();
+  streonet.addLine(dip, dipDir, color);
+}
 
-streonet.addPlane(60, 90); // Example usage
-streonet.addLine(60, 90);
-
-streonet.addPlane(83.2, 257);
-streonet.addLine(83.2, 257);
-
-streonet.addLine(45, 336.6546);
-streonet.addPlane(336.6546, 45);
+// Also add some random planes with random colors
+for (let i = 0; i < 10; i++) {
+  const dip = +(Math.random() * 89.9 + 0.1).toFixed(2);
+  const dipDir = +(Math.random() * 360).toFixed(2);
+  const color = randomColor();
+  streonet.addPlane(dip, dipDir, color);
+}

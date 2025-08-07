@@ -27,12 +27,14 @@ export type PlaneData = {
   dipAngle: number;
   dipDirection: number;
   path: PlanePath;
+  color: string | null;
 };
 
 export type LineData = {
   dipAngle: number;
   dipDirection: number;
   path: LinePath;
+  color: string | null;
 };
 
 export type StyleProperty = string | number | boolean;
