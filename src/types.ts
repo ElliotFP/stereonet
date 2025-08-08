@@ -39,6 +39,7 @@ export type LineData = {
 
 // Cluster input data (what caller provides)
 export type ClusterData = {
+  name: string;
   cluster_planes: PlaneData[];     // members to render as poles
   centroid_plane?: PlaneData;      // optional; if absent, we compute it
   color: string | null;

@@ -45,6 +45,7 @@ export type ClusterData = {
   cluster_planes: PlaneData[];     // members to render as poles
   centroid_plane?: PlaneData;      // optional; if absent, we compute it
   color: string | null;
+  name?: string | null; // + add
 };
 
 const DEFAULT_STYLE: StereonetStyle = {
@@ -708,9 +709,12 @@ export class Stereonet {
       data: {
         cluster_planes: cluster.cluster_planes,
         centroid_plane: centroid,
-        color
+        color,
+        name: cluster.name ?? null, // keep name
       },
     });
+
+    this._wireClusterHover(id, this.clusters.get(id.toString())!);
 
     return id;
   }
@@ -916,5 +920,120 @@ export class Stereonet {
     const d = 90 - dipAngle;                  // radial distance from center
     const dd = this._norm360(dipDirection + 180); // pole azimuth
     return [d, dd];
+  }
+
+  private _ensureClusterTooltip() {
+    if (!d3.select("#cluster-tooltip").node()) {
+      d3.select("body")
+        .append("div")
+        .attr("id", "cluster-tooltip")
+        .style("position", "absolute")
+        .style("background", "rgba(0,0,0,0.7)")
+        .style("color", "#fff")
+        .style("padding", "4px 8px")
+        .style("border-radius", "4px")
+        .style("pointer-events", "none")
+        .style("font-size", "18px")
+        .style("display", "none");
+    }
+  }
+
+  private _wireClusterHover(clusterId: number, rec: ClusterRender) {
+    this._ensureClusterTooltip();
+    const tooltip = d3.select("#cluster-tooltip");
+    const classPath = this.path;
+    const name = rec.data.name ?? `Cluster ${clusterId}`;
+
+    const normalPoint = this.pointSize;
+    const primaryPoint = this.pointSize * 2.0;     // hovered point
+    const secondaryPoint = this.pointSize * 1.0;  // other points in cluster
+
+    const arcOrigStroke = rec.centroidArcPath
+      ? (rec.centroidArcPath.style("stroke-width") || String(this.styles.data_plane["stroke-width"]))
+      : String(this.styles.data_plane["stroke-width"]);
+    const arcPrimaryStroke = "12px";
+    const arcSecondaryStroke = "8px";
+
+    const showTooltip = (event: any, text: string) => {
+      tooltip.html(text)
+        .style("display", "block")
+        .style("left", event.pageX + 10 + "px")
+        .style("top", event.pageY + 10 + "px");
+    };
+    const moveTooltip = (event: any) => {
+      tooltip.style("left", event.pageX + 10 + "px").style("top", event.pageY + 10 + "px");
+    };
+    const hideTooltip = () => tooltip.style("display", "none");
+
+    // Hover handlers for centroid arc (primary = arc)
+    const onOverArc = (event: any) => {
+      // secondary highlight for all cluster points
+      rec.planePolePaths.forEach(p => {
+        d3.select(p.node() as SVGPathElement)
+          .attr("d", classPath.pointRadius(secondaryPoint) as any)
+          .style("stroke-width", "8px");
+      });
+      // primary highlight for centroid arc
+      rec.centroidArcPath?.style("stroke-width", arcPrimaryStroke).style("opacity", 0.85);
+
+      const c = rec.data.centroid_plane!;
+      showTooltip(event, `${name}<br/>Centroid — Dip: ${c.dipAngle.toFixed(1)}°, Dir: ${c.dipDirection.toFixed(1)}°`);
+    };
+    const onMoveArc = (event: any) => moveTooltip(event);
+    const onOutArc = () => {
+      rec.planePolePaths.forEach(p => {
+        d3.select(p.node() as SVGPathElement)
+          .attr("d", classPath.pointRadius(normalPoint) as any)
+          .style("stroke-width", this.styles.data_line["stroke-width"]);
+      });
+      rec.centroidArcPath?.style("stroke-width", arcOrigStroke).style("opacity", 1);
+      hideTooltip();
+    };
+
+    // Hover handlers for member points (primary = the point)
+    rec.planePolePaths.forEach((p, i) => {
+      const onOverPoint = (event: any) => {
+        // primary point
+        d3.select(p.node() as SVGPathElement)
+          .attr("d", classPath.pointRadius(primaryPoint) as any)
+          .style("stroke-width", "12px");
+
+        // secondary for other points
+        rec.planePolePaths.forEach((q, qi) => {
+          if (qi === i) return;
+          d3.select(q.node() as SVGPathElement)
+            .attr("d", classPath.pointRadius(secondaryPoint) as any)
+            .style("stroke-width", "8px");
+        });
+
+        // secondary for centroid arc
+        rec.centroidArcPath?.style("stroke-width", arcSecondaryStroke).style("opacity", 0.85);
+
+        const pl = rec.data.cluster_planes[i];
+        showTooltip(event, `${name}<br/>Point — Dip: ${pl.dipAngle.toFixed(1)}°, Dir: ${pl.dipDirection.toFixed(1)}°`);
+      };
+
+      const onMovePoint = (event: any) => moveTooltip(event);
+
+      const onOutPoint = () => {
+        // reset all points
+        rec.planePolePaths.forEach(q => {
+          d3.select(q.node() as SVGPathElement)
+            .attr("d", classPath.pointRadius(normalPoint) as any)
+            .style("stroke-width", this.styles.data_line["stroke-width"]);
+        });
+        // reset arc
+        rec.centroidArcPath?.style("stroke-width", arcOrigStroke).style("opacity", 1);
+        hideTooltip();
+      };
+
+      p.on("mouseover", null).on("mousemove", null).on("mouseout", null);
+      p.on("mouseover", onOverPoint).on("mousemove", onMovePoint).on("mouseout", onOutPoint);
+    });
+
+    if (rec.centroidArcPath) {
+      rec.centroidArcPath.on("mouseover", null).on("mousemove", null).on("mouseout", null);
+      rec.centroidArcPath.on("mouseover", onOverArc).on("mousemove", onMoveArc).on("mouseout", onOutArc);
+    }
   }
 }

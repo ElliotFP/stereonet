@@ -11,6 +11,7 @@ const mkPlane = (dip: number, dipDir: number): PlaneData => ({
 
 // Cluster A (warm)
 const clusterA: ClusterData = {
+  name: "Cluster A",
   color: "#e41a1c",
   cluster_planes: [
     mkPlane(30, 110),
@@ -28,6 +29,7 @@ const clusterA: ClusterData = {
 
 // Cluster B (cool)
 const clusterB: ClusterData = {
+  name: "Cluster B",
   color: "#377eb8",
   cluster_planes: [
     mkPlane(60, 250),
@@ -45,6 +47,7 @@ const clusterB: ClusterData = {
 
 // Cluster C (green-ish)
 const clusterC: ClusterData = {
+  name: "Cluster C",
   color: "#4daf4a",
   cluster_planes: [
     mkPlane(45, 20),
