@@ -117,6 +117,7 @@ interface ClusterRender {
   color: string | null;
   centroidArcPath: PlanePath<MultiLineString> | null; // was PlanePath | null
   planePolePaths: LinePath[];
+  hullPath: d3.Selection<SVGPathElement, unknown, HTMLElement, undefined> | null; // + add
   data: ClusterData;
 }
 
@@ -702,15 +703,21 @@ export class Stereonet {
       color
     );
 
+    const hullPath = this._renderClusterHull(
+      { cluster_planes: cluster.cluster_planes, centroid_plane: centroid, color, name: cluster.name ?? null },
+      color
+    );
+
     this.clusters.set(id.toString(), {
       color,
       centroidArcPath: arcPath,
       planePolePaths: polePaths,
+      hullPath, // + add
       data: {
         cluster_planes: cluster.cluster_planes,
         centroid_plane: centroid,
         color,
-        name: cluster.name ?? null, // keep name
+        name: cluster.name ?? null,
       },
     });
 
@@ -726,6 +733,7 @@ export class Stereonet {
 
     rec.centroidArcPath?.remove();
     rec.planePolePaths.forEach(p => p.remove());
+    rec.hullPath?.remove();
     this.clusters.delete(key);
   }
 
@@ -922,6 +930,53 @@ export class Stereonet {
     return [d, dd];
   }
 
+  private _projectPoleXY(dipAngle: number, dipDirection: number): [number, number] | null {
+    const base = this.projection([0, dipAngle]); // same base as poles
+    if (!base) return null;
+
+    const theta = (Math.PI / 180) * this._norm360(dipDirection + 180);
+    const cos = Math.cos(theta), sin = Math.sin(theta);
+
+    // match SVG rotate(θ)
+    const x = base[0] * cos - base[1] * sin;
+    const y = base[0] * sin + base[1] * cos;
+
+    return [x, y]; // relative to center; hull path uses this._elementTransformString()
+  }
+
+  private _renderClusterHull(cluster: ClusterData, color: string, paddingPx = 48) {
+    const pts = cluster.cluster_planes
+      .map(p => this._projectPoleXY(p.dipAngle, p.dipDirection))
+      .filter((p): p is [number, number] => !!p);
+
+    if (pts.length < 3) return null;
+
+    const hull = d3.polygonHull(pts);
+    if (!hull) return null;
+
+    const c = d3.polygonCentroid(hull);
+    const meanR = hull.reduce((s, [x, y]) => s + Math.hypot(x - c[0], y - c[1]), 0) / hull.length || 1;
+    const k = 1 + paddingPx / meanR;
+    const padded = hull.map(([x, y]) => [c[0] + (x - c[0]) * k, c[1] + (y - c[1]) * k]) as [number, number][];
+
+    const line = d3.line<[number, number]>()
+      .curve(d3.curveCatmullRomClosed.alpha(0.5));
+
+    const centered = padded.map(([x,y]) => [x + this.width/2, y + this.height/2] as [number,number]);
+    const path = this.g.append("path")
+      .attr("class", "cluster-hull")
+      .attr("transform", null)
+      .attr("d", line(centered) || "")
+      .attr("style", `
+        fill: ${color};
+        fill-opacity: 0.10;
+        stroke: ${color};
+        stroke-width: 3px;
+      `);
+
+    return path;
+  }
+
   private _ensureClusterTooltip() {
     if (!d3.select("#cluster-tooltip").node()) {
       d3.select("body")
@@ -975,6 +1030,7 @@ export class Stereonet {
       });
       // primary highlight for centroid arc
       rec.centroidArcPath?.style("stroke-width", arcPrimaryStroke).style("opacity", 0.85);
+      rec.hullPath?.style("stroke-width", "8px").style("opacity", 0.95);
 
       const c = rec.data.centroid_plane!;
       showTooltip(event, `${name}<br/>Centroid — Dip: ${c.dipAngle.toFixed(1)}°, Dir: ${c.dipDirection.toFixed(1)}°`);
@@ -987,6 +1043,7 @@ export class Stereonet {
           .style("stroke-width", this.styles.data_line["stroke-width"]);
       });
       rec.centroidArcPath?.style("stroke-width", arcOrigStroke).style("opacity", 1);
+      rec.hullPath?.style("stroke-width", "3px").style("opacity", 1);
       hideTooltip();
     };
 
@@ -1008,6 +1065,7 @@ export class Stereonet {
 
         // secondary for centroid arc
         rec.centroidArcPath?.style("stroke-width", arcSecondaryStroke).style("opacity", 0.85);
+        rec.hullPath?.style("stroke-width", "6px").style("opacity", 0.9);
 
         const pl = rec.data.cluster_planes[i];
         showTooltip(event, `${name}<br/>Point — Dip: ${pl.dipAngle.toFixed(1)}°, Dir: ${pl.dipDirection.toFixed(1)}°`);
@@ -1024,6 +1082,7 @@ export class Stereonet {
         });
         // reset arc
         rec.centroidArcPath?.style("stroke-width", arcOrigStroke).style("opacity", 1);
+        rec.hullPath?.style("stroke-width", "3px").style("opacity", 1);
         hideTooltip();
       };
 
