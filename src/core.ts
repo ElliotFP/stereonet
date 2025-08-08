@@ -118,6 +118,8 @@ interface ClusterRender {
   centroidArcPath: PlanePath<MultiLineString> | null; // was PlanePath | null
   planePolePaths: LinePath[];
   hullPath: d3.Selection<SVGPathElement, unknown, HTMLElement, undefined> | null; // + add
+  heatmapGroup: d3.Selection<SVGGElement, unknown, HTMLElement, undefined> | null;
+  heatmapClipId: string | null;
   data: ClusterData;
 }
 
@@ -708,11 +710,21 @@ export class Stereonet {
       color
     );
 
+    const { group: heatmapGroup, clipId: heatmapClipId } =
+      hullPath ? this._renderClusterHeatmap(id, {
+        cluster_planes: cluster.cluster_planes,
+        centroid_plane: centroid,
+        color,
+        name: cluster.name ?? null
+      }, color, hullPath) : { group: null, clipId: null };
+
     this.clusters.set(id.toString(), {
       color,
       centroidArcPath: arcPath,
       planePolePaths: polePaths,
-      hullPath, // + add
+      hullPath: hullPath ?? null,
+      heatmapGroup,
+      heatmapClipId: heatmapClipId ?? null,
       data: {
         cluster_planes: cluster.cluster_planes,
         centroid_plane: centroid,
@@ -734,6 +746,8 @@ export class Stereonet {
     rec.centroidArcPath?.remove();
     rec.planePolePaths.forEach(p => p.remove());
     rec.hullPath?.remove();
+    rec.heatmapGroup?.remove();
+    if (rec.heatmapClipId) this.svg.select(`#${rec.heatmapClipId}`).remove();
     this.clusters.delete(key);
   }
 
@@ -972,9 +986,63 @@ export class Stereonet {
         fill-opacity: 0.10;
         stroke: ${color};
         stroke-width: 3px;
-      `);
+      `)
+      .style("pointer-events", "none");
 
     return path;
+  }
+
+  private _renderClusterHeatmap(
+    clusterId: number,
+    cluster: ClusterData,
+    color: string,
+    hullPath: d3.Selection<SVGPathElement, unknown, HTMLElement, undefined>,
+    bandwidthPx = 28,
+    thresholds = 10
+  ) {
+    // screen-space points (absolute coords)
+    const pts: [number, number][] = cluster.cluster_planes
+      .map(p => this._projectPoleXY(p.dipAngle, p.dipDirection))
+      .filter((p): p is [number, number] => !!p)
+      .map(([x, y]) => ([x + this.width / 2, y + this.height / 2] as [number, number]));
+
+    if (pts.length < 3) return { group: null, clipId: null };
+
+    const density = d3.contourDensity<[number, number]>()
+      .x(d => d[0])
+      .y(d => d[1])
+      .size([this.width, this.height])
+      .bandwidth(bandwidthPx)
+      .thresholds(thresholds)(pts);
+
+    const maxV = d3.max(density, d => d.value) ?? 1;
+    const opacity = d3.scaleLinear().domain([0, maxV]).range([0.03, 0.18]);
+
+    // clip to hull: use hull path's current 'd' + transform
+    const clipId = `cluster-hull-clip-${clusterId}-${Math.random().toString(36).slice(2)}`;
+    const clip = this.svg.append("clipPath").attr("id", clipId);
+    clip.append("path")
+      .attr("d", hullPath.attr("d"))
+      .attr("transform", hullPath.attr("transform"));
+
+    // draw contours in a group clipped to hull, send below hull/points
+    const contourPath = d3.geoPath(); // pixel space
+    const g = this.g.append("g").attr("clip-path", `url(#${clipId})`);
+
+    g.selectAll("path")
+      .data(density)
+      .join("path")
+      .attr("d", d => contourPath(d) as any)
+      .attr("fill", color)
+      .attr("fill-opacity", d => opacity(d.value))
+      .attr("stroke", "none");
+
+    // keep heatmap behind everything
+    g
+      .style("pointer-events", "none")
+      .lower();
+
+    return { group: g, clipId };
   }
 
   private _ensureClusterTooltip() {
