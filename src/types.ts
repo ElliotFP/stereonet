@@ -1,21 +1,21 @@
+import type * as d3 from "d3";
+import type { LineString, MultiLineString } from "geojson";
+
 export interface PoleRepresentation {
   type: "Point";
   coordinates: [number, number];
 }
 
-/**
- * The D3 path type for rendered planes.
- */
-export type PlanePath = d3.Selection<
+// Either great-circle/arc as MultiLineString, or small-circle as LineString (future use)
+export type PlaneDatum = MultiLineString | LineString;
+
+export type PlanePath<D extends PlaneDatum = PlaneDatum> = d3.Selection<
   SVGPathElement,
-  GeoJSON.MultiLineString,
+  D,
   HTMLElement,
   undefined
 >;
 
-/**
- * The D3 path type for rendered lines (lines are rendered as the points of their poles)
- */
 export type LinePath = d3.Selection<
   SVGPathElement,
   PoleRepresentation,
@@ -24,9 +24,9 @@ export type LinePath = d3.Selection<
 >;
 
 export type PlaneData = {
-  dipAngle: number;
-  dipDirection: number;
-  path: PlanePath;
+  dipAngle: number;       // 0..90
+  dipDirection: number;   // azimuth CW from north 0..360
+  path: PlanePath | LinePath;
   color: string | null;
 };
 
@@ -34,6 +34,13 @@ export type LineData = {
   dipAngle: number;
   dipDirection: number;
   path: LinePath;
+  color: string | null;
+};
+
+// Cluster input data (what caller provides)
+export type ClusterData = {
+  cluster_planes: PlaneData[];     // members to render as poles
+  centroid_plane?: PlaneData;      // optional; if absent, we compute it
   color: string | null;
 };
 

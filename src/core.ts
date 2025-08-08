@@ -1,14 +1,51 @@
 import * as d3 from "d3";
 import "./style.css";
 
-import {
-  PlanePath,
-  LinePath,
+import type { LineString, MultiLineString } from "geojson";
+import { StereonetStyle } from "./types";
+
+export interface PoleRepresentation {
+  type: "Point";
+  coordinates: [number, number];
+}
+
+// Either great-circle/arc as MultiLineString, or small-circle as LineString (future use)
+export type PlaneDatum = MultiLineString | LineString;
+
+export type PlanePath<D extends PlaneDatum = MultiLineString> = d3.Selection<
+  SVGPathElement,
+  D,
+  HTMLElement,
+  undefined
+>;
+
+export type LinePath = d3.Selection<
+  SVGPathElement,
   PoleRepresentation,
-  PlaneData,
-  StereonetStyle,
-  LineData,
-} from "./types";
+  HTMLElement,
+  undefined
+>;
+
+export type PlaneData = {
+  dipAngle: number;       // 0..90
+  dipDirection: number;   // azimuth CW from north 0..360
+  path: LinePath | PlanePath<MultiLineString>;
+  color: string | null;
+};
+
+export type LineData = {
+  dipAngle: number;
+  dipDirection: number;
+  path: LinePath;
+  color: string | null;
+};
+
+// Cluster input data (what caller provides)
+export type ClusterData = {
+  cluster_planes: PlaneData[];     // members to render as poles
+  centroid_plane?: PlaneData;      // optional; if absent, we compute it
+  color: string | null;
+};
 
 const DEFAULT_STYLE: StereonetStyle = {
   stereonet_outline: {
@@ -71,7 +108,15 @@ interface StereonetOptions {
     | false;
   showGraticules?: boolean;
   planeRepresentation?: "pole" | "arc";
-  pointSize?: number; 
+  pointSize?: number;
+}
+
+// Internal render-tracking shape
+interface ClusterRender {
+  color: string | null;
+  centroidArcPath: PlanePath<MultiLineString> | null; // was PlanePath | null
+  planePolePaths: LinePath[];
+  data: ClusterData;
 }
 
 export class Stereonet {
@@ -94,6 +139,7 @@ export class Stereonet {
   graticulesVisible: boolean;
   planeRepresentation: "pole" | "arc"; // Representation of the planes on the stereonet
   pointSize: number; // Size of the points representing poles
+  clusters: Map<string, ClusterRender>;
 
   constructor({
     selector = "body",
@@ -128,6 +174,7 @@ export class Stereonet {
     this.graticulesVisible = showGraticules;
     this.planeRepresentation = planeRepresentation;
     this.pointSize = pointSize;
+    this.clusters = new Map();
 
     // @ts-expect-error no-issue
     this.svg = d3
@@ -183,17 +230,17 @@ export class Stereonet {
     }
     this._renderOutlineCrosshairs();
 
-    const currentPlanes = Array.from(this.planes.entries());
-    const currentLines = Array.from(this.lines.entries());
+    const currentPlanes = Array.from(this.planes.values());
+    const currentLines = Array.from(this.lines.values());
+    const currentClusters = Array.from(this.clusters.values()).map(c => c.data);
+
     this.planes.clear();
     this.lines.clear();
+    this.clusters.clear();
 
-    for (const [, plane] of currentPlanes) {
-      this.addPlane(plane.dipAngle, plane.dipDirection, plane.color);
-    }
-    for (const [, line] of currentLines) {
-      this.addLine(line.dipAngle, line.dipDirection, line.color);
-    }
+    for (const p of currentPlanes) this.addPlane(p.dipAngle, p.dipDirection, p.color ?? undefined);
+    for (const l of currentLines) this.addLine(l.dipAngle, l.dipDirection, l.color ?? undefined);
+    for (const c of currentClusters) this.addCluster(c);
   }
 
   setPlaneRepresentation(representation: "pole" | "arc") {
@@ -371,19 +418,22 @@ export class Stereonet {
   }
 
   // Add this helper method to the Stereonet class
-  private _createCustomColorStyle(color: string, elementType: "line" | "plane" | "plane_pole"): string {
-    const baseStyle = elementType === "line" 
-      ? { ...this.styles.data_line }
-      : elementType === "plane"
-      ? { ...this.styles.data_plane }
-      : { ...this.styles.data_plane_pole };
+  private _createCustomColorStyle(
+    color: string,
+    elementType: "line" | "plane" | "plane_pole"
+  ): string {
+    const baseStyle =
+      elementType === "line"
+        ? { ...this.styles.data_line }
+        : elementType === "plane"
+          ? { ...this.styles.data_plane }
+          : { ...this.styles.data_plane_pole };
 
     // Override color properties
     if (elementType === "plane") {
       // no fill for planes
       baseStyle.stroke = color;
-    }
-    else {
+    } else {
       baseStyle.fill = color;
       baseStyle.stroke = color;
     }
@@ -394,10 +444,54 @@ export class Stereonet {
       .join(" ");
   }
 
-  private _addPlaneHoverInteraction(
-    path: PlanePath,
+  // Degrees/radians helpers
+  private _toRad(d: number) { return (d * Math.PI) / 180; }
+  private _toDeg(r: number) { return (r * 180) / Math.PI; }
+  private _norm360(a: number) { return (a % 360 + 360) % 360; }
+
+  // Convert plane (dip, dipDir) → pole vector (unit), lower hemisphere (z >= 0)
+  private _planeToPoleVector(dip: number, dipDir: number) {
+    // Pole trend (azimuth) is dipDir + 180; pole plunge is 90 - dip
+    const trend = this._norm360(dipDir + 180);
+    const plunge = 90 - dip; // positive downward
+
+    const T = this._toRad(trend);
+    const P = this._toRad(plunge);
+
+    // East (x), North (y), Down (z)
+    const x = Math.cos(P) * Math.sin(T);
+    const y = Math.cos(P) * Math.cos(T);
+    const z = Math.sin(P);
+
+    // If vector is on upper hemisphere, flip to lower
+    if (z < 0) { return { x: -x, y: -y, z: -z }; }
+    return { x, y, z };
+  }
+
+  // Mean of pole vectors → centroid plane (dip, dipDir)
+  private _meanPoleVectorsToPlane(vecs: {x:number;y:number;z:number}[]) {
+    const sx = vecs.reduce((s,v)=>s+v.x, 0);
+    const sy = vecs.reduce((s,v)=>s+v.y, 0);
+    const sz = vecs.reduce((s,v)=>s+v.z, 0);
+    const len = Math.sqrt(sx*sx + sy*sy + sz*sz) || 1;
+
+    // normalized mean pole vector (lower hemisphere)
+    let x = sx / len, y = sy / len, z = sz / len;
+    if (z < 0) { x=-x; y=-y; z=-z; }
+
+    const plunge = this._toDeg(Math.asin(z));        // 0..90 down
+    const trend = this._norm360(this._toDeg(Math.atan2(x, y))); // 0..360 from north, CW
+    const dip = 90 - plunge;
+    const dipDir = this._norm360(trend - 180);
+
+    return { dipAngle: dip, dipDirection: dipDir };
+  }
+
+  // Accept any plane datum D
+  private _addPlaneHoverInteraction<D extends PlaneDatum>(
+    path: PlanePath<D>,
     dipAngle: number,
-    dipDirection: number,
+    dipDirection: number
   ) {
     // Add tooltip element if it doesn't exist
     if (!d3.select("#plane-tooltip").node()) {
@@ -417,14 +511,6 @@ export class Stereonet {
     // const originalStrokeWidth = path.style("stroke-width") || String(this.styles.data_plane["stroke-width"]);
     const tooltip = d3.select("#plane-tooltip");
 
-    const getStyle = (className: string) => {
-      const style = this.styles[className];
-      if (!style) {
-        throw new Error(`Style for class "${className}" not found.`);
-      }
-      return style;
-    };
-
     let originalStrokeWidth = this.styles.data_plane["stroke-width"];
     path
       .on("mouseover", function () {
@@ -432,10 +518,14 @@ export class Stereonet {
         originalStrokeWidth = sel.style("stroke-width") || originalStrokeWidth;
         sel.style("stroke-width", "10px");
         sel.style("opacity", 0.6);
-        tooltip.html(`Dip: ${dipAngle}°, Dip Direction: ${dipDirection}°`).style("display", "block");
+        tooltip
+          .html(`Dip: ${dipAngle}°, Dip Direction: ${dipDirection}°`)
+          .style("display", "block");
       })
       .on("mousemove", function (event) {
-        tooltip.style("left", event.pageX + 10 + "px").style("top", event.pageY + 10 + "px");
+        tooltip
+          .style("left", event.pageX + 10 + "px")
+          .style("top", event.pageY + 10 + "px");
       })
       .on("mouseout", function () {
         const sel = d3.select(this as SVGPathElement);
@@ -443,20 +533,6 @@ export class Stereonet {
         sel.style("opacity", 1);
         tooltip.style("display", "none");
       });
-  }
-
-  private _calculatePoleCoordinates(
-    dipAngle: number, // placement on the dip direction line [0, 90]
-    dipDirection: number // clockwise from north [0, 360)
-  ): [number, number] {
-    let dd = dipDirection + 180;
-
-    if (dd >= 360) {
-      dd = dipDirection + 180 - 360; // Normalize to [0, 360)
-    }
-
-    const d = 90 - dipAngle;
-    return [d, dd];
   }
 
   private _renderPlaneAsArc(
@@ -481,7 +557,12 @@ export class Stereonet {
     const path = this.g
       .append("path")
       .datum(graticuleInput)
-      .attr("style", color ? this._createCustomColorStyle(color, "plane") : this.getStyle("data_plane"))
+      .attr(
+        "style",
+        color
+          ? this._createCustomColorStyle(color, "plane")
+          : this.getStyle("data_plane")
+      )
       .attr(
         "transform",
         `${this._elementTransformString()} rotate(${dipDirection - 90})`
@@ -497,10 +578,10 @@ export class Stereonet {
         .style("opacity", 1);
     }
 
-    this._addPlaneHoverInteraction(path, dipAngle, dipDirection);
+    // This is an arc (MultiLineString), so call plane-hover here
+    this._addPlaneHoverInteraction(path as PlanePath<GeoJSON.MultiLineString>, dipAngle, dipDirection);
 
-
-    return path;
+    return path as PlanePath<GeoJSON.MultiLineString>;
   }
 
   private _renderPlaneAsPole(
@@ -518,7 +599,12 @@ export class Stereonet {
     const path = this.g
       .append("path")
       .datum(point)
-      .attr("style", color ? this._createCustomColorStyle(color, "plane_pole") : this.getStyle("data_plane_pole"))
+      .attr(
+        "style",
+        color
+          ? this._createCustomColorStyle(color, "plane_pole")
+          : this.getStyle("data_plane_pole")
+      )
       .attr(
         "transform",
         `${this._elementTransformString()} rotate(${poleCoords[1]})`
@@ -537,10 +623,9 @@ export class Stereonet {
       path.attr("d", this.path.pointRadius(this.pointSize));
     }
 
-    // @ts-expect-error no-issuer
-    this._addPlaneHoverInteraction(path, dipAngle, dipDirection);
+    this._addLineHoverInteraction(path as LinePath, dipAngle, dipDirection);
 
-    return path;
+    return path as LinePath;
   }
 
   /**
@@ -588,10 +673,128 @@ export class Stereonet {
     });
   }
 
+  // Draw cluster members as poles and centroid as arc
+  addCluster(cluster: ClusterData) {
+    const id = this.clusters.size;
+    const color = cluster.color ?? "#3cb371";
+
+    // Decide centroid: use provided or compute
+    let centroid = cluster.centroid_plane;
+    if (!centroid) {
+      const vecs = cluster.cluster_planes.map(p =>
+        this._planeToPoleVector(p.dipAngle, p.dipDirection)
+      );
+      const mean = this._meanPoleVectorsToPlane(vecs);
+      centroid = { ...mean, path: undefined as any, color };
+    }
+
+    // Render poles for each plane
+    const polePaths: LinePath[] = cluster.cluster_planes.map(p =>
+      this._renderPlaneAsPole(p.dipAngle, p.dipDirection, id, color)
+    );
+
+    // Render centroid as arc
+    const arcPath = this._renderPlaneAsArc(
+      centroid.dipAngle,
+      centroid.dipDirection,
+      id,
+      color
+    );
+
+    this.clusters.set(id.toString(), {
+      color,
+      centroidArcPath: arcPath,
+      planePolePaths: polePaths,
+      data: {
+        cluster_planes: cluster.cluster_planes,
+        centroid_plane: centroid,
+        color
+      },
+    });
+
+    return id;
+  }
+
+  removeCluster(clusterId: number) {
+    const key = clusterId.toString();
+    const rec = this.clusters.get(key);
+    if (!rec) return;
+
+    rec.centroidArcPath?.remove();
+    rec.planePolePaths.forEach(p => p.remove());
+    this.clusters.delete(key);
+  }
+
+  getClusters() {
+    return Array.from(this.clusters.entries()).map(([id, c]) => ({
+      id,
+      color: c.color,
+      data: c.data,
+    }));
+  }
+
+  // Optional: mutate a cluster after creation
+  addClusterPlane(clusterId: number, plane: PlaneData) {
+    const rec = this.clusters.get(clusterId.toString());
+    if (!rec) return;
+    const color = rec.color ?? plane.color ?? null;
+    const p = this._renderPlaneAsPole(plane.dipAngle, plane.dipDirection, clusterId, color ?? undefined);
+    rec.planePolePaths.push(p);
+    rec.data.cluster_planes.push(plane);
+    // Recompute and redraw centroid
+    this._rerenderClusterCentroid(clusterId);
+  }
+
+  removeClusterPlane(clusterId: number, planeIndex: number) {
+    const rec = this.clusters.get(clusterId.toString());
+    if (!rec) return;
+    const path = rec.planePolePaths[planeIndex];
+    if (path) path.remove();
+    rec.planePolePaths.splice(planeIndex, 1);
+    rec.data.cluster_planes.splice(planeIndex, 1);
+    this._rerenderClusterCentroid(clusterId);
+  }
+
+  getClusterPlanes(clusterId: number) {
+    const rec = this.clusters.get(clusterId.toString());
+    return rec?.data.cluster_planes ?? [];
+  }
+
+  private _rerenderClusterCentroid(clusterId: number) {
+    const rec = this.clusters.get(clusterId.toString());
+    if (!rec) return;
+
+    // remove old centroid
+    rec.centroidArcPath?.remove();
+
+    const vecs = rec.data.cluster_planes.map(p =>
+      this._planeToPoleVector(p.dipAngle, p.dipDirection)
+    );
+    const mean = this._meanPoleVectorsToPlane(vecs);
+
+    rec.data.centroid_plane = {
+      dipAngle: mean.dipAngle,
+      dipDirection: mean.dipDirection,
+      path: undefined as any,
+      color: rec.color,
+    };
+
+    rec.centroidArcPath = this._renderPlaneAsArc(
+      rec.data.centroid_plane.dipAngle,
+      rec.data.centroid_plane.dipDirection,
+      Number(clusterId),
+      rec.color ?? undefined
+    );
+  }
+
+  addClusterLine(clusterId: number, line: LineData) {
+    // add a line to a cluster
+  }
+
   private _addLineHoverInteraction(
     path: LinePath,
     dipAngle: number,
-    dipDirection: number,
+    dipDirection: number
   ) {
     if (!d3.select("#line-tooltip").node()) {
       d3.select("body")
@@ -614,7 +817,7 @@ export class Stereonet {
     const largePointSize = this.pointSize * 1.5;
 
     const originalStrokeWidth = this.styles.data_line["stroke-width"];
-    
+
     path
       .on("mouseover", function () {
         // @ts-expect-error no-issue
@@ -648,7 +851,9 @@ export class Stereonet {
 
     const id = this.lines.size;
 
-    const style = color ? this._createCustomColorStyle(color, "line") : this.getStyle("data_line");
+    const style = color
+      ? this._createCustomColorStyle(color, "line")
+      : this.getStyle("data_line");
 
     const point = {
       type: "Point",
@@ -702,5 +907,14 @@ export class Stereonet {
     return Array.from(this.lines).map(line => {
       return { id: line[0], path: line[1] };
     });
+  }
+
+  private _calculatePoleCoordinates(
+    dipAngle: number,
+    dipDirection: number
+  ): [number, number] {
+    const d = 90 - dipAngle;                  // radial distance from center
+    const dd = this._norm360(dipDirection + 180); // pole azimuth
+    return [d, dd];
   }
 }
