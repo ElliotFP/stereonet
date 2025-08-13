@@ -22,7 +22,19 @@ function normalToPlaneDeg(nx: number, ny: number, nz: number) {
  * - dfn.blocks[].fracture_data.orientations is an array of [nx, ny, nz] normals
  * - Optional arrays dfn.blocks[].fracture_data.lengths, apertures, widths align by index
  */
-export function parseAllPlanesFromDFN(dfn: any): PlaneData[] {
+export type DFNFilterOptions = {
+  lengthMin?: number;
+  lengthMax?: number;
+  apertureMin?: number;
+  apertureMax?: number;
+  widthMin?: number;
+  widthMax?: number;
+};
+
+export function parseAllPlanesFromDFN(
+  dfn: any,
+  filters: DFNFilterOptions = {}
+): PlaneData[] {
   const planes: PlaneData[] = [];
   const blocks = (dfn?.blocks ?? []) as any[];
   for (const b of blocks) {
@@ -37,6 +49,20 @@ export function parseAllPlanesFromDFN(dfn: any): PlaneData[] {
       if (!Array.isArray(o) || o.length < 3) continue;
       const mapped = normalToPlaneDeg(Number(o[0]), Number(o[1]), Number(o[2]));
       if (!mapped) continue;
+
+      // Apply filters based on optional per-fracture arrays
+      const within = (v: number | undefined, min?: number, max?: number) => {
+        if (v === undefined || !Number.isFinite(v)) return true; // no value → ignore filter
+        if (min !== undefined && v < min) return false;
+        if (max !== undefined && v > max) return false;
+        return true;
+      };
+      const L = Number.isFinite(lengths[i]) ? Number(lengths[i]) : undefined;
+      const A = Number.isFinite(apertures[i]) ? Number(apertures[i]) : undefined;
+      const W = Number.isFinite(widths[i]) ? Number(widths[i]) : undefined;
+      if (!within(L, filters.lengthMin, filters.lengthMax)) continue;
+      if (!within(A, filters.apertureMin, filters.apertureMax)) continue;
+      if (!within(W, filters.widthMin, filters.widthMax)) continue;
       planes.push({
         dipAngle: mapped.dipAngle,
         dipDirection: mapped.dipDirection,
