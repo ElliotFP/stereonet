@@ -17,7 +17,63 @@
     </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="controls" style="position:sticky;top:0;z-index:10;background:#fff;padding:18px 24px;border-bottom:2px solid #bbb;display:flex;gap:22px;align-items:center; font-size: 2.8em; min-height: 48px;">
+      <label>Model
+        <select id="model-select">
+          <option value="none" selected>Poles only</option>
+          <option value="dbscan">DBSCAN</option>
+          <option value="optics">OPTICS</option>
+        </select>
+      </label>
+      <span id="params-dbscan" style="display:none;">
+        epsDeg: <input id="epsDeg" type="number" step="0.5" value="12" style="width:70px" />
+        minPts: <input id="minPts" type="number" step="1" value="8" style="width:70px" />
+      </span>
+      <span id="params-optics" style="display:none;">
+        minPts: <input id="optMinPts" type="number" step="1" value="12" style="width:70px" />
+        quantile: <input id="optQuantile" type="number" step="0.05" min="0" max="1" value="0.75" style="width:80px" />
+        minClusterSize: <input id="optMinClusterSize" type="number" step="1" value="25" style="width:90px" />
+      </span>
+      <span id="params-global-heatmap" style="display:none;">
+        bandwidthDeg: <input id="gHeatBwDeg" type="number" step="1" value="8" style="width:90px" />
+        stepDeg: <input id="gHeatStep" type="number" step="1" value="2" style="width:70px" />
+        thresholds: <input id="gHeatThr" type="number" step="1" value="12" style="width:70px" />
+        color: <input id="gHeatColor" type="color" value="#d14747" />
+        alphaMin: <input id="gHeatAmin" type="number" step="0.01" value="0.05" style="width:70px" />
+        alphaMax: <input id="gHeatAmax" type="number" step="0.01" value="0.25" style="width:70px" />
+      </span>
+      <button id="run-btn" type="button">Run</button>
+      <div style="margin-left:auto; display:flex; align-items:center;">
+        <button id="filter-btn" type="button">Filter…</button>
+      </div>
+    </div>
+    <div id="app" style="width:100%; min-height: 600px"></div>
+    <!-- Filter modal -->
+    <div id="filter-modal" style="display:none; position:fixed; inset:0; background: rgba(0,0,0,0.35); z-index:9999; align-items:center; justify-content:center;">
+      <div style="background:#fff; padding:18px 22px; border:1px solid #aaa; border-radius:8px; min-width:420px; max-width:90vw;">
+        <div style="font-weight:600; margin-bottom:10px;">Filter planes</div>
+        <div style="display:grid; grid-template-columns: auto auto auto; gap:10px; align-items:center;">
+          <div style="grid-column: 1 / 4; font-weight:600;">Length</div>
+          <label>min <input id="flt-length-min" type="number" step="any" style="width:110px"></label>
+          <label>max <input id="flt-length-max" type="number" step="any" style="width:110px"></label>
+          <span></span>
+          <div style="grid-column: 1 / 4; font-weight:600;">Aperture</div>
+          <label>min <input id="flt-aperture-min" type="number" step="any" style="width:110px"></label>
+          <label>max <input id="flt-aperture-max" type="number" step="any" style="width:110px"></label>
+          <span></span>
+          <div style="grid-column: 1 / 4; font-weight:600;">Width</div>
+          <label>min <input id="flt-width-min" type="number" step="any" style="width:110px"></label>
+          <label>max <input id="flt-width-max" type="number" step="any" style="width:110px"></label>
+          <span></span>
+        </div>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+          <button id="flt-reset" type="button">Reset</button>
+          <button id="flt-cancel" type="button">Cancel</button>
+          <button id="flt-apply" type="button">Apply</button>
+        </div>
+      </div>
+    </div>
+    
     <script type="module" src="/example/main.ts"></script>
   </body>
 </html>
