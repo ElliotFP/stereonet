@@ -157,6 +157,80 @@ Returns a list of all lines currently plotted on the stereonet.
 
 ---
 
+### `addCluster(cluster: ClusterData): number`
+
+Render a cluster of planes in one call. Member planes are drawn as poles, the centroid plane (computed if not supplied) is drawn as an arc, and a soft outline/heatmap is added for context.
+
+```ts
+import type { ClusterData, PlaneData } from "stereonet";
+const mk = (dip: number, dir: number): PlaneData => ({ dipAngle: dip, dipDirection: dir, path: undefined as any, color: null });
+
+const cluster: ClusterData = {
+  name: "Example",
+  color: "#377eb8",
+  cluster_planes: [mk(30, 110), mk(32, 115), mk(28, 105)],
+};
+
+stereonet.addCluster(cluster);
+```
+
+Use `removeCluster(id)`, `getClusters()`, `addClusterPlane(id, plane)` and `removeClusterPlane(id, idx)` to manage clusters.
+
+---
+
+## Clustering models
+
+The package exposes basic clustering helpers under `ClusteringModels` for arrays of `PlaneData`.
+
+### DBSCAN
+
+```ts
+import { ClusteringModels } from "stereonet";
+
+const { clusters, outliers } = ClusteringModels.dbscanPlanes(planes, {
+  epsDeg: 8,   // neighborhood angle (deg)
+  minPts: 8,   // min neighbors to form a core point
+  namePrefix: "DFN",
+});
+
+clusters.forEach(c => stereonet.addCluster(c));
+outliers.forEach(p => stereonet.addPlane(p.dipAngle, p.dipDirection, "#777"));
+```
+
+### OPTICS
+
+Convenience call that returns `ClusterData[]` and outlier planes:
+
+```ts
+const { clusters, outliers } = ClusteringModels.opticsClusterPlanes(planes, {
+  minPts: 12,
+  quantile: 0.75,
+  minClusterSize: 25,
+});
+
+clusters.forEach(c => stereonet.addCluster(c));
+outliers.forEach(p => stereonet.addPlane(p.dipAngle, p.dipDirection, "#777"));
+```
+
+Low-level API (indices):
+
+```ts
+const optics = ClusteringModels.opticsOrder(planes, { minPts: 12 });
+const extracted = ClusteringModels.extractClustersFromOPTICS(optics, { quantile: 0.75, minClusterSize: 25 });
+```
+
+Notes
+- Clustering is performed in lower-hemisphere pole-vector space.
+- Centroids are mean pole vectors converted back to (dip, dipDirection).
+- Colors cycle a small palette; pass your own via `palette` if needed.
+
+### Visual example
+
+The figure below shows two detected clusters rendered with member poles, centroid arcs, soft outlines, and a clipped heatmap indicating internal density:
+
+![Clustering with outlines and density](docs/screenshot_clustering_outlines.png)
+
+
 ### `showGraticules(): void`
 
 Shows the graticules on the stereonet.
